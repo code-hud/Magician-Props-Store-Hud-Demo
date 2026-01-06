@@ -61,7 +61,6 @@ services:
     container_name: magician-props-web
     environment:
       PORT: 3000
-      REACT_APP_API_URL: http://localhost:3001
     ports:
       - "3000:3000"
     depends_on:
