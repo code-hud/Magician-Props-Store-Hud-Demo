@@ -42,6 +42,7 @@ services:
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/magician_props_store
       PORT: 3001
       CHECKOUT_SERVICE_URL: http://checkout:3002
+      HUD_API_KEY: ${HUD_API_KEY}
     ports:
       - "3001:3001"
     depends_on:
