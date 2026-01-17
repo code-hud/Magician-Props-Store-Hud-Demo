@@ -542,6 +542,36 @@ body {
   background-color: #5568d3;
 }
 
+/* Product Suggestions */
+.product-suggestions {
+  margin-top: 3rem;
+  padding-top: 2rem;
+  border-top: 1px solid #eee;
+}
+
+.product-suggestions h3 {
+  font-size: 1.3rem;
+  margin-bottom: 1rem;
+}
+
+.suggestions-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.5rem;
+}
+
+.suggestions-loading {
+  text-align: center;
+  padding: 2rem;
+  color: #666;
+}
+
+@media (max-width: 768px) {
+  .suggestions-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Checkout Container */
 .checkout-container {
   max-width: 800px;

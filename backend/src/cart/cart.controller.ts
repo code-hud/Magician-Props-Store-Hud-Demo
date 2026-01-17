@@ -10,6 +10,11 @@ export class CartController {
     return this.cartService.getCart(sessionId);
   }
 
+  @Get('suggestions')
+  async getSuggestions(@Query('sessionId') sessionId: string) {
+    return this.cartService.getSuggestions(sessionId);
+  }
+
   @Post('add')
   async addToCart(
     @Query('sessionId') sessionId: string,

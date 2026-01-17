@@ -1,5 +1,6 @@
 import React from 'react';
 import { useStore } from '../context/StoreContext';
+import ProductSuggestions from './ProductSuggestions';
 
 export default function Cart({ onCheckout }) {
   const { cart, cartTotal, removeProductFromCart } = useStore();
@@ -56,6 +57,8 @@ export default function Cart({ onCheckout }) {
           Proceed to Checkout
         </button>
       </div>
+
+      <ProductSuggestions />
     </div>
   );
 }

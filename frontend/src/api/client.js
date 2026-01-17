@@ -67,6 +67,12 @@ export const getCartTotal = (sessionId) => {
   });
 };
 
+export const getCartSuggestions = (sessionId) => {
+  return getClient().get('/cart/suggestions', {
+    params: { sessionId },
+  });
+};
+
 export const clearCart = (sessionId) => {
   return getClient().delete('/cart', {
     params: { sessionId },
