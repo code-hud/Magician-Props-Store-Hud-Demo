@@ -27,12 +27,16 @@ export class OrdersService {
       });
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
+        const statusCode = error.response.status >= 400 && error.response.status < 500
+          ? error.response.status
+          : HttpStatus.INTERNAL_SERVER_ERROR;
+
         throw new HttpException(
           {
             error: error.response.data?.error || 'Checkout failed',
             message: error.response.data?.message || 'Checkout service returned an error',
           },
-          HttpStatus.INTERNAL_SERVER_ERROR,
+          statusCode,
         );
       }
       throw error;
