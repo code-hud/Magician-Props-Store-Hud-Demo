@@ -27,12 +27,24 @@ export class OrdersService {
       });
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
+        const status = error.response.status;
+
+        if (status === 429) {
+          throw new HttpException(
+            {
+              error: 'Rate Limit Exceeded',
+              message: error.response.data?.message || 'Too many checkout requests. Please try again later.',
+            },
+            HttpStatus.TOO_MANY_REQUESTS,
+          );
+        }
+
         throw new HttpException(
           {
             error: error.response.data?.error || 'Checkout failed',
             message: error.response.data?.message || 'Checkout service returned an error',
           },
-          HttpStatus.INTERNAL_SERVER_ERROR,
+          HttpStatus.BAD_REQUEST,
         );
       }
       throw error;
