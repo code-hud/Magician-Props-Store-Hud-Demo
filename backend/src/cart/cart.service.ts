@@ -22,6 +22,11 @@ export class CartService {
     productId: number,
     quantity: number = 1,
   ): Promise<CartItem> {
+    const existingItem = await this.cartRepository.findItem(sessionId, productId);
+    if (existingItem) {
+      const newQuantity = existingItem.quantity + quantity;
+      return this.cartRepository.updateQuantity(sessionId, productId, newQuantity);
+    }
     return this.cartRepository.addItem(sessionId, productId, quantity);
   }
 
