@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Param, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Param, Body, Query, BadRequestException } from '@nestjs/common';
 import { OrdersService } from './orders.service';
 
 @Controller('orders')
@@ -17,6 +17,22 @@ export class OrdersController {
       items: { productId: number; quantity: number; price: number }[];
     },
   ) {
+    if (!body.totalAmount || body.totalAmount <= 0) {
+      throw new BadRequestException('totalAmount is required and must be greater than 0');
+    }
+    if (!Array.isArray(body.items)) {
+      throw new BadRequestException('items must be an array');
+    }
+    if (!body.customerName) {
+      throw new BadRequestException('customerName is required');
+    }
+    if (!body.customerEmail) {
+      throw new BadRequestException('customerEmail is required');
+    }
+    if (!body.customerPhone) {
+      throw new BadRequestException('customerPhone is required');
+    }
+
     return this.ordersService.createOrder(
       sessionId,
       body.customerName,
