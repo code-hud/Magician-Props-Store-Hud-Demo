@@ -1,0 +1,563 @@
+# Hud Auto-Fix Workflow
+# Triggered by webhook with issue context, analyzes root cause using Hud MCP,
+# and opens a PR with a suggested fix.
+#
+# Webhook payload (repository_dispatch) should include:
+# {
+#   "event_type": "hud-issue",
+#   "client_payload": {
+#     "title": "POST /Orders endpoints failed 3.54k times in 7d",
+#     "description": "...",
+#     "error_count": 3540,
+#     "time_range": "7d",
+#     "endpoint": "POST /orders",
+#     "stack_trace": "...",
+#     "additional_context": "..."
+#   }
+# }
+#
+# Required secrets:
+# - ANTHROPIC_API_KEY
+# - HUD_API_KEY
+# - JIRA_BASE_URL      — e.g. https://yourorg.atlassian.net
+# - JIRA_USER_EMAIL    — Hud service account email in Jira
+# - JIRA_API_TOKEN     — API token for that account
+
+name: Hud Auto-Fix
+
+on:
+  repository_dispatch:
+    types: [hud-issue]
+  workflow_dispatch:
+    inputs:
+      title:
+        description: 'Issue title'
+        required: true
+        type: string
+      description:
+        description: 'Issue description'
+        required: false
+        type: string
+      endpoint:
+        description: 'Affected endpoint (e.g., POST /orders)'
+        required: false
+        type: string
+      error_count:
+        description: 'Number of errors'
+        required: false
+        type: string
+      time_range:
+        description: 'Time range (e.g., 7d)'
+        required: false
+        default: '7d'
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  analyze-and-fix:
+    name: Analyze Issue & Create Fix PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Mask app token
+        if: github.event_name == 'repository_dispatch'
+        run: echo "::add-mask::${{ github.event.client_payload.token }}"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.event.client_payload.token || github.token }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Extract issue context
+        id: issue
+        run: |
+          # Extract from repository_dispatch or workflow_dispatch
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            TITLE='${{ github.event.client_payload.title }}'
+            DESCRIPTION='${{ github.event.client_payload.description }}'
+            ENDPOINT='${{ github.event.client_payload.endpoint }}'
+            ERROR_COUNT='${{ github.event.client_payload.error_count }}'
+            TIME_RANGE='${{ github.event.client_payload.time_range }}'
+            STACK_TRACE='${{ github.event.client_payload.stack_trace }}'
+            ADDITIONAL_CONTEXT='${{ github.event.client_payload.additional_context }}'
+            ISSUE_LINK='${{ github.event.client_payload.issue_link }}'
+            ENDPOINT_LINK='${{ github.event.client_payload.endpoint_link }}'
+            SLOWDOWN='${{ github.event.client_payload.slowdown }}'
+          else
+            TITLE='${{ inputs.title }}'
+            DESCRIPTION='${{ inputs.description }}'
+            ENDPOINT='${{ inputs.endpoint }}'
+            ERROR_COUNT='${{ inputs.error_count }}'
+            TIME_RANGE='${{ inputs.time_range }}'
+            STACK_TRACE=''
+            ADDITIONAL_CONTEXT=''
+            ISSUE_LINK=''
+            ENDPOINT_LINK=''
+            SLOWDOWN=''
+          fi
+
+          # Set defaults
+          TIME_RANGE="${TIME_RANGE:-7d}"
+
+          echo "title=$TITLE" >> $GITHUB_OUTPUT
+          echo "endpoint=$ENDPOINT" >> $GITHUB_OUTPUT
+          echo "error_count=$ERROR_COUNT" >> $GITHUB_OUTPUT
+          echo "time_range=$TIME_RANGE" >> $GITHUB_OUTPUT
+          echo "issue_link=$ISSUE_LINK" >> $GITHUB_OUTPUT
+          echo "endpoint_link=$ENDPOINT_LINK" >> $GITHUB_OUTPUT
+          echo "slowdown=$SLOWDOWN" >> $GITHUB_OUTPUT
+
+          # Branch name is finalized after Claude runs (uses Claude's slug)
+          echo "run_number=${{ github.run_number }}" >> $GITHUB_OUTPUT
+
+          # Write full context to file for Claude
+          cat > /tmp/issue_context.txt << 'ISSUE_EOF'
+          Title: $TITLE
+          Endpoint: $ENDPOINT
+          Error Count: $ERROR_COUNT
+          Time Range: $TIME_RANGE
+
+          Description:
+          $DESCRIPTION
+
+          Stack Trace:
+          $STACK_TRACE
+
+          Additional Context:
+          $ADDITIONAL_CONTEXT
+          ISSUE_EOF
+
+          # Use envsubst to expand variables
+          export TITLE DESCRIPTION ENDPOINT ERROR_COUNT TIME_RANGE STACK_TRACE ADDITIONAL_CONTEXT
+          envsubst < /tmp/issue_context.txt > /tmp/issue_context_expanded.txt
+          mv /tmp/issue_context_expanded.txt /tmp/issue_context.txt
+
+          echo "Issue context:"
+          cat /tmp/issue_context.txt
+
+      - name: Create Jira ticket
+        id: jira
+        run: |
+          TITLE="${{ steps.issue.outputs.title }}"
+          ERROR_COUNT="${{ steps.issue.outputs.error_count }}"
+          TIME_RANGE="${{ steps.issue.outputs.time_range }}"
+          ENDPOINT="${{ steps.issue.outputs.endpoint }}"
+          ISSUE_LINK="${{ steps.issue.outputs.issue_link }}"
+          ENDPOINT_LINK="${{ steps.issue.outputs.endpoint_link }}"
+
+          # Build Jira description in ADF (Atlassian Document Format)
+          # Each piece of info gets its own paragraph so newlines render properly
+          SLOWDOWN="${{ steps.issue.outputs.slowdown }}"
+
+          if [ -n "$ERROR_COUNT" ] && [ "$ERROR_COUNT" -gt 0 ] 2>/dev/null; then
+            MAIN_TEXT="Hud detected ${ERROR_COUNT} errors on ${ENDPOINT} over ${TIME_RANGE}."
+          elif [ -n "$SLOWDOWN" ]; then
+            MAIN_TEXT="Hud detected a performance degradation on ${ENDPOINT}: ${SLOWDOWN}."
+          else
+            MAIN_TEXT="Hud detected an issue on ${ENDPOINT}."
+          fi
+
+          PARAGRAPHS=$(jq -n \
+            --arg main "$MAIN_TEXT" \
+            --arg issue_link "$ISSUE_LINK" \
+            --arg endpoint_link "$ENDPOINT_LINK" \
+            '[
+              { type: "paragraph", content: [{ type: "text", text: $main }] }
+            ]
+            + if $issue_link != "" then
+                [{ type: "paragraph", content: [{ type: "text", text: ("Hud issue: " + $issue_link) }] }]
+              else [] end
+            + if $endpoint_link != "" then
+                [{ type: "paragraph", content: [{ type: "text", text: ("Endpoint: " + $endpoint_link) }] }]
+              else [] end
+            ')
+
+          jq -n \
+            --arg summary "$TITLE" \
+            --argjson paragraphs "$PARAGRAPHS" \
+            '{
+              fields: {
+                project: { key: "MAGSTORE" },
+                issuetype: { name: "Bug" },
+                summary: $summary,
+                description: {
+                  type: "doc",
+                  version: 1,
+                  content: $paragraphs
+                }
+              }
+            }' > /tmp/jira_payload.json
+
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue" \
+            -d @/tmp/jira_payload.json)
+
+          HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            JIRA_KEY=$(echo "$BODY" | jq -r '.key')
+            echo "jira_key=$JIRA_KEY" >> $GITHUB_OUTPUT
+            echo "jira_url=${{ secrets.JIRA_BASE_URL }}/browse/$JIRA_KEY" >> $GITHUB_OUTPUT
+            echo "✅ Created Jira ticket: $JIRA_KEY"
+          else
+            echo "::warning::Failed to create Jira ticket (HTTP $HTTP_CODE): $BODY"
+            echo "jira_key=" >> $GITHUB_OUTPUT
+            echo "jira_url=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Hud MCP configuration
+        run: |
+          mkdir -p ~/.claude
+          cat > ~/.claude/mcp_servers.json << EOF
+          {
+            "mcpServers": {
+              "hud": {
+                "command": "npx",
+                "args": ["-y", "hud-mcp@prerelease"],
+                "env": {
+                  "HUD_MCP_KEY": "${{ secrets.HUD_API_KEY }}"
+                }
+              }
+            }
+          }
+          EOF
+          echo "MCP configuration created"
+
+      - name: Install Claude Code CLI
+        run: |
+          echo "Installing Claude Code CLI..."
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Configure git identity
+        run: |
+          git config user.name "hud-issuehelper[bot]"
+          git config user.email "216726706+hud-issuehelper[bot]@users.noreply.github.com"
+
+      - name: Analyze and fix with Claude
+        id: claude-fix
+        run: |
+          echo "🔍 Analyzing issue and generating fix..."
+
+          TITLE="${{ steps.issue.outputs.title }}"
+
+          # Build the prompt
+          cat > /tmp/fix_prompt.txt << 'PROMPT_EOF'
+          You are a senior software engineer tasked with fixing a production issue.
+
+          ## Issue Context
+          PROMPT_EOF
+
+          cat /tmp/issue_context.txt >> /tmp/fix_prompt.txt
+
+          cat >> /tmp/fix_prompt.txt << 'PROMPT_EOF'
+
+          ## Your Task
+
+          1. **Investigate the root cause** using the Hud MCP tools:
+             - Use `hud-get-schema` to understand the available data tables
+             - Use `hud-query` to run SQL queries against Hud's data to find error patterns and insights related to this issue
+             - Use `hud-get-forensics` to get detailed forensics for this issue
+             - Use `hud-get-skill` if there are any relevant skills/fixes already documented
+
+          2. **Analyze the codebase** to find the problematic code:
+             - Search for the affected endpoint/functionality
+             - Understand the code flow that leads to the error
+             - Identify the root cause
+
+          3. **Implement a fix**:
+             - Make the minimal necessary changes to fix the issue
+             - Ensure the fix is safe and doesn't introduce regressions
+             - The endpoint must NEVER return 5XX errors. Handle all errors gracefully — if the issue stems from bad user input or client-side mistakes, return a 400 with a clear error message instead of letting the exception bubble up as a 500
+
+          4. **Write a summary** of your findings to /tmp/fix_summary.md using EXACTLY this format (keep the headers as-is):
+
+             ### Root Cause
+             <1-2 concise paragraphs explaining the root cause>
+
+             ### Changes Made
+             <bulleted list of specific changes, referencing file paths. Use inline code backticks for file paths, function names, status codes, and other code references (e.g. `src/orders/orders.service.ts:17-40`, `HttpStatus.TOO_MANY_REQUESTS`).>
+
+             ### Expected Impact
+             <1 plain-text sentence describing the expected improvement. For error-related issues, estimate how many failed requests/week this fix will prevent based on the error count and time range. For performance/slowdown issues, estimate the latency improvement (e.g. "should reduce p50 response time from 3.5s back to ~20ms"). Do NOT use bold, headings, or any markdown formatting in this sentence.>
+
+             Do NOT add any other headers or sections. Keep it concise and professional. Use inline code backticks for file paths, function names, and code references. Do not add extra headings.
+
+          5. **Write a branch slug** to /tmp/branch_slug.txt:
+             - Write a short (2-5 words) description of the root cause, separated by hyphens
+             - Use only lowercase letters and hyphens, no numbers or special characters
+             - Focus on the root cause, not the symptom (e.g., "missing-null-check" not "orders-endpoint-failing")
+             - Examples: "fraud-check-null-email", "missing-total-validation", "unhandled-db-constraint"
+             - Write ONLY the slug, nothing else
+
+          IMPORTANT:
+          - Only modify files that are necessary to fix the issue
+          - Keep changes minimal and focused
+          - Do not refactor unrelated code
+          - Do not add unnecessary comments or documentation
+          - CRITICAL: You MUST run `npm run lint` after all code changes and fix every linting error. Do NOT finish until the linter passes with zero errors. This is a hard requirement.
+          PROMPT_EOF
+
+          echo "Prompt size: $(wc -c < /tmp/fix_prompt.txt) bytes"
+
+          # Run Claude with Hud MCP (stream-json captures full chain of thought)
+          STREAM_FILE="/tmp/claude_stream.jsonl"
+          OUTPUT_FILE="/tmp/claude_output.txt"
+          STDERR_FILE="/tmp/claude_stderr.txt"
+
+          set +e
+          cat /tmp/fix_prompt.txt | claude \
+            -p \
+            --model "sonnet" \
+            --output-format stream-json \
+            --verbose \
+            --mcp-config ~/.claude/mcp_servers.json \
+            --dangerously-skip-permissions \
+            > "$STREAM_FILE" 2>"$STDERR_FILE"
+          CLAUDE_EXIT=$?
+          set -e
+
+          # Extract final answer from stream
+          jq -r 'select(.type == "result") | .result // empty' "$STREAM_FILE" > "$OUTPUT_FILE" 2>/dev/null || true
+
+          echo "Claude exit code: $CLAUDE_EXIT"
+
+          if [ "$CLAUDE_EXIT" -ne 0 ]; then
+            echo "::warning::Claude CLI exited with code $CLAUDE_EXIT"
+            tail -50 "$STDERR_FILE"
+          fi
+
+          # Check if any files were modified
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "::warning::No files were modified by Claude"
+            echo "files_changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "Files were modified:"
+            git status --short
+            echo "files_changed=true" >> $GITHUB_OUTPUT
+          fi
+
+          # Read branch slug from Claude, fallback to generic name
+          if [ -f "/tmp/branch_slug.txt" ]; then
+            SLUG=$(cat /tmp/branch_slug.txt | tr -d '[:space:]')
+          else
+            SLUG="auto-fix"
+          fi
+          BRANCH_NAME="hud/${SLUG}/${{ steps.issue.outputs.run_number }}"
+          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+          # fix_summary.md is read directly in the PR body step
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Create branch, commit and push
+        if: steps.claude-fix.outputs.files_changed == 'true'
+        run: |
+          git checkout -b "${{ steps.claude-fix.outputs.branch_name }}"
+          git add -A ':!.github/workflows'
+          JIRA_KEY="${{ steps.jira.outputs.jira_key }}"
+          if [ -n "$JIRA_KEY" ]; then
+            COMMIT_PREFIX="${JIRA_KEY}: "
+          else
+            COMMIT_PREFIX=""
+          fi
+          git commit -m "${COMMIT_PREFIX}${{ steps.issue.outputs.title }}
+
+          Automated fix by Hud (https://hud.io)"
+          git push -u origin "${{ steps.claude-fix.outputs.branch_name }}"
+
+      - name: Create Pull Request
+        if: steps.claude-fix.outputs.files_changed == 'true'
+        id: create-pr
+        run: |
+          TITLE="${{ steps.issue.outputs.title }}"
+          ERROR_COUNT="${{ steps.issue.outputs.error_count }}"
+          TIME_RANGE="${{ steps.issue.outputs.time_range }}"
+          ENDPOINT="${{ steps.issue.outputs.endpoint }}"
+          ISSUE_LINK="${{ steps.issue.outputs.issue_link }}"
+          ENDPOINT_LINK="${{ steps.issue.outputs.endpoint_link }}"
+
+          # Format Hud issue link
+          if [ -n "$ISSUE_LINK" ]; then
+            ISSUE_DISPLAY="[View in Hud](${ISSUE_LINK})"
+          else
+            ISSUE_DISPLAY=""
+          fi
+
+          if [ -n "$ENDPOINT_LINK" ]; then
+            ENDPOINT_DISPLAY="[\`${ENDPOINT}\`](${ENDPOINT_LINK})"
+          else
+            ENDPOINT_DISPLAY="\`${ENDPOINT}\`"
+          fi
+
+          JIRA_KEY="${{ steps.jira.outputs.jira_key }}"
+          JIRA_URL="${{ steps.jira.outputs.jira_url }}"
+
+          # Build PR title
+          if [ -n "$JIRA_KEY" ]; then
+            PR_TITLE="${JIRA_KEY}: ${TITLE}"
+          else
+            PR_TITLE="${TITLE}"
+          fi
+
+          # Build PR body
+          {
+            # Links first, then stats
+            METADATA_LINE=""
+            if [ -n "$ISSUE_DISPLAY" ]; then
+              METADATA_LINE="${ISSUE_DISPLAY}"
+            fi
+            if [ -n "$JIRA_KEY" ]; then
+              [ -n "$METADATA_LINE" ] && METADATA_LINE="${METADATA_LINE} &nbsp;&middot;&nbsp; "
+              METADATA_LINE="${METADATA_LINE}[${JIRA_KEY}](${JIRA_URL})"
+            fi
+            SLOWDOWN="${{ steps.issue.outputs.slowdown }}"
+
+            [ -n "$METADATA_LINE" ] && METADATA_LINE="${METADATA_LINE} &nbsp;&middot;&nbsp; "
+            METADATA_LINE="${METADATA_LINE}${ENDPOINT_DISPLAY}"
+            if [ -n "$ERROR_COUNT" ] && [ "$ERROR_COUNT" -gt 0 ] 2>/dev/null; then
+              METADATA_LINE="${METADATA_LINE} &nbsp;&middot;&nbsp; **${ERROR_COUNT}** errors / ${TIME_RANGE}"
+            elif [ -n "$SLOWDOWN" ]; then
+              METADATA_LINE="${METADATA_LINE} &nbsp;&middot;&nbsp; ${SLOWDOWN}"
+            fi
+            echo "$METADATA_LINE"
+            echo ''
+            echo '---'
+            echo ''
+            if [ -f "/tmp/fix_summary.md" ]; then
+              cat /tmp/fix_summary.md
+            else
+              echo "Auto-generated fix by Hud"
+            fi
+            echo ''
+            echo '---'
+            echo ''
+            echo '**Validation**'
+            echo ''
+            echo "- [ ] Review code changes"
+            echo "- [ ] Merge and deploy"
+            if [ -n "$ENDPOINT_LINK" ]; then
+              echo "- [ ] [Monitor on Hud](${ENDPOINT_LINK})"
+            else
+              echo "- [ ] Monitor on Hud"
+            fi
+            echo ''
+            echo '<sub><a href="https://hud.io">hud.io</a> &nbsp;&middot;&nbsp; <a href="https://docs.hud.io">docs</a> &nbsp;&middot;&nbsp; <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">workflow run</a></sub>'
+          } > /tmp/pr_body.md
+
+          PR_URL=$(gh pr create \
+            --title "$PR_TITLE" \
+            --body-file /tmp/pr_body.md \
+            --base main \
+            --head "${{ steps.claude-fix.outputs.branch_name }}" \
+            --label "hud")
+
+          echo "pr_url=$PR_URL" >> $GITHUB_OUTPUT
+          echo "✅ Created PR: $PR_URL"
+        env:
+          GH_TOKEN: ${{ github.event.client_payload.token || github.token }}
+
+      - name: Update Jira ticket with fix details
+        if: steps.claude-fix.outputs.files_changed == 'true' && steps.jira.outputs.jira_key != ''
+        run: |
+          JIRA_KEY="${{ steps.jira.outputs.jira_key }}"
+          PR_URL="${{ steps.create-pr.outputs.pr_url }}"
+
+          # Read the fix summary (contains Root Cause, Changes Made, Expected Impact)
+          FIX_SUMMARY=""
+          if [ -f "/tmp/fix_summary.md" ]; then
+            FIX_SUMMARY=$(cat /tmp/fix_summary.md)
+          fi
+
+          # Fetch current description from the ticket
+          CURRENT=$(curl -s \
+            -H "Content-Type: application/json" \
+            -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${JIRA_KEY}?fields=description")
+
+          # Build new paragraphs: fix summary + PR link
+          NEW_PARAGRAPHS=$(jq -n --arg summary "$FIX_SUMMARY" --arg pr "$PR_URL" '
+            [
+              { type: "rule" },
+              { type: "paragraph", content: [
+                { type: "text", text: $summary }
+              ]},
+              { type: "rule" },
+              { type: "paragraph", content: [
+                { type: "text", text: "Fix PR: " },
+                {
+                  type: "text",
+                  text: $pr,
+                  marks: [{ type: "link", attrs: { href: $pr } }]
+                }
+              ]}
+            ]')
+
+          # Append to existing description
+          UPDATED_DESC=$(echo "$CURRENT" | jq --argjson new "$NEW_PARAGRAPHS" '
+            .fields.description.content += $new
+            | { fields: { description: .fields.description } }
+          ')
+
+          echo "$UPDATED_DESC" > /tmp/jira_update.json
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X PUT \
+            -H "Content-Type: application/json" \
+            -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/${JIRA_KEY}" \
+            -d @/tmp/jira_update.json)
+
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo "✅ Updated $JIRA_KEY with fix details and PR link"
+          else
+            echo "::warning::Failed to update Jira ticket $JIRA_KEY (HTTP $HTTP_CODE)"
+          fi
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hud-auto-fix-${{ steps.jira.outputs.jira_key || github.run_number }}-${{ github.run_number }}
+          path: |
+            /tmp/issue_context.txt
+            /tmp/fix_prompt.txt
+            /tmp/fix_summary.md
+            /tmp/claude_stream.jsonl
+            /tmp/claude_output.txt
+            /tmp/claude_stderr.txt
+          retention-days: 7
+          if-no-files-found: warn
+
+      - name: Report status
+        if: always()
+        run: |
+          echo "## 🔮 Hud Auto-Fix Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Jira:** ${{ steps.jira.outputs.jira_key }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Title:** ${{ steps.issue.outputs.title }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ steps.claude-fix.outputs.files_changed }}" = "true" ]; then
+            echo "✅ **Status:** Fix generated and PR created" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**PR:** ${{ steps.create-pr.outputs.pr_url }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **Status:** No code changes were made" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "Claude analyzed the issue but did not modify any files. Check the artifacts for details." >> $GITHUB_STEP_SUMMARY
+          fi
