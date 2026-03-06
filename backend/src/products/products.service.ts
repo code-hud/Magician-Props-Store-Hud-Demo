@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
 import { ProductRepository } from './repositories/product.repository';
@@ -19,26 +19,34 @@ export class ProductsService {
 
   async findAll(search?: string, category?: string): Promise<ProductWithPopularity[]> {
     const products = await this.productRepository.searchWithFilters(search, category);
+    if (products.length === 0) {
+      return [];
+    }
 
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-    const productsWithPopularity: ProductWithPopularity[] = [];
-    for (const product of products) {
-      const orderCount = await this.orderItemRepository.count({
-        where: {
-          product_id: product.id,
-          created_at: MoreThanOrEqual(oneWeekAgo),
-        }
-      });
+    const productIds = products.map((product) => product.id);
+    const popularityRows = await this.orderItemRepository
+      .createQueryBuilder('order_item')
+      .select('order_item.product_id', 'product_id')
+      .addSelect('COUNT(order_item.id)', 'times_ordered')
+      .where('order_item.created_at >= :oneWeekAgo', { oneWeekAgo })
+      .andWhere('order_item.product_id IN (:...productIds)', { productIds })
+      .groupBy('order_item.product_id')
+      .getRawMany<{ product_id: string; times_ordered: string }>();
 
-      productsWithPopularity.push({
-        ...product,
-        timesOrdered: orderCount,
-      });
-    }
+    const popularityByProductId = new Map<number, number>(
+      popularityRows.map((row) => [
+        Number(row.product_id),
+        Number(row.times_ordered),
+      ]),
+    );
 
-    return productsWithPopularity;
+    return products.map((product) => ({
+      ...product,
+      timesOrdered: popularityByProductId.get(product.id) ?? 0,
+    }));
   }
 
   async findOne(id: number): Promise<Product> {
