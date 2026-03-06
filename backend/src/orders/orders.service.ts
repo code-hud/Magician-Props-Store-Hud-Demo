@@ -20,12 +20,25 @@ export class OrdersService {
     items: { productId: number; quantity: number; price: number }[],
   ): Promise<void> {
     try {
-      await axios.post(`${this.checkoutServiceUrl}/checkout`, {
+      const response = await axios.post(`${this.checkoutServiceUrl}/checkout`, {
         sessionId,
         totalAmount,
         items,
       });
+
+      if (!response.data?.success) {
+        throw new HttpException(
+          {
+            error: response.data?.decision || 'Checkout rejected',
+            message: response.data?.fraud?.message || response.data?.issue || 'Checkout was not approved',
+          },
+          HttpStatus.BAD_REQUEST,
+        );
+      }
     } catch (error) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       if (axios.isAxiosError(error) && error.response) {
         throw new HttpException(
           {
