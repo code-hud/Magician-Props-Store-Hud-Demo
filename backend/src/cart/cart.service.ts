@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { CartItem } from './entities/cart-item.entity';
 import { CartRepository } from './repositories/cart.repository';
-import { ProductsService } from '../products/products.service';
-import { Product } from '../products/entities/product.entity';
+import {
+  ProductsService,
+  ProductWithPopularity,
+} from '../products/products.service';
 
 @Injectable()
 export class CartService {
@@ -48,7 +50,7 @@ export class CartService {
     );
   }
 
-  async getSuggestions(sessionId: string): Promise<Product[]> {
+  async getSuggestions(sessionId: string): Promise<ProductWithPopularity[]> {
     const cartItems = await this.cartRepository.findBySessionId(sessionId);
     if (cartItems.length === 0) return [];
 
@@ -69,9 +71,10 @@ export class CartService {
     const cartProductIds = new Set(cartItems.map((i) => i.product_id));
     const availableProducts = products.filter((p) => !cartProductIds.has(p.id));
 
-    // Shuffle and pick 3 random products
-    const shuffled = availableProducts.sort(() => Math.random() - 0.5);
-    const suggestions = shuffled.slice(0, 3);
+    // Sort by popularity (most ordered first) and pick top 3
+    const suggestions = availableProducts
+      .sort((a, b) => b.timesOrdered - a.timesOrdered)
+      .slice(0, 3);
 
     return suggestions;
   }
