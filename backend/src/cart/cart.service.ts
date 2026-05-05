@@ -1,14 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { CartItem } from './entities/cart-item.entity';
 import { CartRepository } from './repositories/cart.repository';
-import { ProductRepository } from '../products/repositories/product.repository';
+import { ProductsService } from '../products/products.service';
 import { Product } from '../products/entities/product.entity';
 
 @Injectable()
 export class CartService {
   constructor(
     private cartRepository: CartRepository,
-    private productRepository: ProductRepository,
+    private productsService: ProductsService,
   ) {}
 
   async getCart(sessionId: string): Promise<CartItem[]> {
@@ -64,10 +64,7 @@ export class CartService {
 
     if (!primaryCategory) return [];
 
-    const products = await this.productRepository.searchWithFilters(
-      '',
-      primaryCategory,
-    );
+    const products = await this.productsService.findAll('', primaryCategory);
 
     const cartProductIds = new Set(cartItems.map((i) => i.product_id));
     const availableProducts = products.filter((p) => !cartProductIds.has(p.id));
