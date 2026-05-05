@@ -1,3 +1,5 @@
+const { randomBytes } = require('node:crypto');
+
 const BASE_URL = process.env.API_URL || 'http://backend:3001';
 
 // Utility functions
@@ -6,13 +8,36 @@ const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + mi
 const randomFloat = (min, max) => Math.random() * (max - min) + min;
 
 // Generate a unique session ID for this load tester instance
-const sessionId = `load-tester-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+const sessionId = `lt-${Math.random().toString(36).substr(2, 8)}-${Math.random().toString(36).substr(2, 4)}`;
+
+// Simulated customer account IDs — rotated per cycle to mimic multi-tenant traffic
+const ACCOUNT_IDS = ['acme-corp', 'globex-inc', 'initech', 'umbrella-co', 'wayne-ent'];
+
+// Generate a W3C traceparent header. The Hud SDK auto-collects this from
+// incoming HTTP requests for distributed tracing.
+// Format: 00-<trace-id 32hex>-<span-id 16hex>-01
+const generateTraceparent = () => {
+  const traceId = randomBytes(16).toString('hex');
+  const spanId = randomBytes(8).toString('hex');
+  return `00-${traceId}-${spanId}-01`;
+};
+
+let currentAccountId = ACCOUNT_IDS[0];
+
+const fetchWithTrace = (url, init = {}) => {
+  const headers = {
+    ...(init.headers || {}),
+    traceparent: generateTraceparent(),
+    'X-Account-Id': currentAccountId,
+  };
+  return fetch(url, { ...init, headers });
+};
 
 console.log(`[${new Date().toISOString()}] Load Tester started with session: ${sessionId}`);
 
 async function getProducts() {
   try {
-    const response = await fetch(`${BASE_URL}/products`);
+    const response = await fetchWithTrace(`${BASE_URL}/products`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const products = await response.json();
     return products;
@@ -24,7 +49,7 @@ async function getProducts() {
 
 async function addToCart(productId, quantity) {
   try {
-    const response = await fetch(`${BASE_URL}/cart/add?sessionId=${sessionId}`, {
+    const response = await fetchWithTrace(`${BASE_URL}/cart/add?sessionId=${sessionId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -47,7 +72,7 @@ async function addToCart(productId, quantity) {
 
 async function getCart() {
   try {
-    const response = await fetch(`${BASE_URL}/cart?sessionId=${sessionId}`);
+    const response = await fetchWithTrace(`${BASE_URL}/cart?sessionId=${sessionId}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const cart = await response.json();
     return cart;
@@ -59,7 +84,7 @@ async function getCart() {
 
 async function getCartSuggestions() {
   try {
-    const response = await fetch(`${BASE_URL}/cart/suggestions?sessionId=${sessionId}`);
+    const response = await fetchWithTrace(`${BASE_URL}/cart/suggestions?sessionId=${sessionId}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const suggestions = await response.json();
     console.log(`[${new Date().toISOString()}] ✓ Got ${suggestions.length} product suggestions`);
@@ -74,13 +99,13 @@ async function checkout(cartItems) {
   try {
     const totalAmount = cartItems.reduce((sum, item) => sum + item.product.price * item.quantity, 0) || undefined;
 
-    const response = await fetch(`${BASE_URL}/orders?sessionId=${sessionId}`, {
+    const response = await fetchWithTrace(`${BASE_URL}/orders?sessionId=${sessionId}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         customerName: `Load Tester ${sessionId.split('-')[1]}`,
         customerEmail: `load-tester-${sessionId}@test.local`,
-        customerPhone: '555-0000',
+        customerPhone: '555-012-3456',
         totalAmount,
         items: cartItems.map((item) => ({
           productId: item.product_id,
@@ -115,7 +140,8 @@ async function checkout(cartItems) {
 }
 
 async function runCycle() {
-  console.log(`\n[${new Date().toISOString()}] ========== NEW CYCLE START ==========`);
+  currentAccountId = ACCOUNT_IDS[Math.floor(Math.random() * ACCOUNT_IDS.length)];
+  console.log(`\n[${new Date().toISOString()}] ========== NEW CYCLE START (account: ${currentAccountId}) ==========`);
 
   // Fetch products
   const products = await getProducts();
