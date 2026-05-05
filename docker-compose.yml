@@ -36,6 +36,11 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        # `:?` makes compose abort with an error if GIT_COMMIT_SHA is unset or
+        # empty in the shell env, so we can never accidentally build with no
+        # commit tag. Set it via:  GIT_COMMIT_SHA=$(git rev-parse --short HEAD)
+        GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:?GIT_COMMIT_SHA must be set, e.g. export GIT_COMMIT_SHA=$(git rev-parse --short HEAD)}
     container_name: magician-props-api
     environment:
       NODE_ENV: development
@@ -43,6 +48,7 @@ services:
       PORT: 3001
       CHECKOUT_SERVICE_URL: http://checkout:3002
       HUD_API_KEY: ${HUD_API_KEY}
+      GIT_COMMIT_SHA: ${GIT_COMMIT_SHA:?GIT_COMMIT_SHA must be set, e.g. export GIT_COMMIT_SHA=$(git rev-parse --short HEAD)}
     ports:
       - "3001:3001"
     depends_on:
