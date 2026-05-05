@@ -21,7 +21,7 @@
     "@nestjs/platform-express": "^10.0.0",
     "@nestjs/typeorm": "^10.0.0",
     "axios": "^1.6.0",
-    "hud-sdk": "^1.7.6",
+    "hud-sdk": "^1.8.5",
     "pg": "^8.10.0",
     "reflect-metadata": "^0.1.13",
     "rimraf": "^5.0.0",

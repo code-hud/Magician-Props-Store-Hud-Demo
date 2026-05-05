@@ -2349,6 +2349,17 @@ INSERT INTO products (name, description, price, category, stock) VALUES
 ('Professional Yellow Plastic Card Deck', 'Professional card deck in yellow. Material: Plastic.', 25, 'Cards', 34),
 ('Professional MultiColor Plastic Card Deck', 'Professional card deck in multicolor. Material: Plastic.', 8.0, 'Cards', 28);
 
+-- Generate additional products to increase catalog size per category
+INSERT INTO products (name, description, price, category, stock)
+SELECT
+  'Magic ' || category || ' #' || g AS name,
+  'Premium quality magic prop for professional performers' AS description,
+  (10 + (g * 7 + 13) % 80)::numeric(10,2) AS price,
+  category,
+  (10 + (g * 3 + 7) % 100) AS stock
+FROM (VALUES ('Silks'), ('Wands')) AS cats(category),
+     generate_series(1, 1500) AS g;
+
 -- Create indexes for better query performance
 CREATE INDEX idx_products_category ON products(category);
 CREATE INDEX idx_cart_items_session ON cart_items(session_id);

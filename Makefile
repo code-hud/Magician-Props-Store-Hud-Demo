@@ -1,5 +1,14 @@
 .PHONY: help build up down logs clean restart test
 
+# Derive the commit SHA from the current checkout and export it so docker-compose
+# (which uses ${GIT_COMMIT_SHA:?...}) and the backend Dockerfile (ARG GIT_COMMIT_SHA)
+# can pick it up. If you're not in a git checkout this fails loudly - that's the point.
+GIT_COMMIT_SHA := $(shell git rev-parse --short HEAD 2>/dev/null)
+ifeq ($(GIT_COMMIT_SHA),)
+$(error GIT_COMMIT_SHA could not be derived. Run inside a git checkout, or set GIT_COMMIT_SHA=<sha> explicitly)
+endif
+export GIT_COMMIT_SHA
+
 help:
 	@echo "Magician Props Store - Available Commands"
 	@echo ""
@@ -14,17 +23,22 @@ help:
 	@echo "  make clean          - Remove all containers and volumes"
 	@echo "  make shell-db       - Open database shell"
 	@echo ""
+	@echo "  Hud session tag commit_sha = $(GIT_COMMIT_SHA)"
+	@echo ""
 
 build:
+	@echo "Building with GIT_COMMIT_SHA=$(GIT_COMMIT_SHA)"
 	docker-compose build
 
 up:
+	@echo "Starting with GIT_COMMIT_SHA=$(GIT_COMMIT_SHA)"
 	docker-compose up -d
 	@echo ""
 	@echo "✅ Services started!"
 	@echo "Frontend: http://localhost:3000"
 	@echo "Backend:  http://localhost:3001"
 	@echo "Database: postgres://localhost:5432"
+	@echo "Hud commit_sha tag: $(GIT_COMMIT_SHA)"
 
 down:
 	docker-compose down
