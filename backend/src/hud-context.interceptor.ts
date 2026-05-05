@@ -28,7 +28,6 @@ export class HudContextInterceptor implements NestInterceptor {
         : undefined;
     if (sessionId) {
       context.session_id = sessionId;
-      context.is_load_tester = sessionId.startsWith('load-tester-');
     }
 
     const incomingRequestId = req?.headers?.['x-request-id'];
