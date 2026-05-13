@@ -49,6 +49,40 @@ export class ProductRepository {
     return products;
   }
 
+  async searchWithFiltersAndPopularity(
+    search: string | undefined,
+    category: string | undefined,
+    since: Date,
+  ): Promise<(Product & { timesOrdered: number })[]> {
+    const query = this.repository
+      .createQueryBuilder('product')
+      .leftJoin(
+        'order_items',
+        'oi',
+        'oi.product_id = product.id AND oi.created_at >= :since',
+        { since },
+      )
+      .addSelect('COUNT(oi.id)::int', 'timesOrdered')
+      .groupBy('product.id')
+      .orderBy('product.created_at', 'DESC');
+
+    if (search) {
+      query.andWhere(
+        '(product.name ILIKE :search OR product.description ILIKE :search)',
+        { search: `%${search}%` },
+      );
+    }
+    if (category) {
+      query.andWhere('product.category = :category', { category });
+    }
+
+    const { entities, raw } = await query.getRawAndEntities<{ timesOrdered: string | number }>();
+    return entities.map((entity, i) => ({
+      ...entity,
+      timesOrdered: Number(raw[i]?.timesOrdered ?? 0) || 0,
+    }));
+  }
+
   async getCategories(): Promise<string[]> {
     const categories = await this.repository
       .createQueryBuilder('product')
