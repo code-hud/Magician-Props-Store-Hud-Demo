@@ -13,7 +13,6 @@ export class CartRepository {
   async findBySessionId(sessionId: string): Promise<CartItem[]> {
     const items = await this.repository.find({
       where: { session_id: sessionId },
-      relations: ['product'],
     });
     console.log(`[CartRepository] Found ${items.length} items in cart for session ${sessionId}`);
     return items;
