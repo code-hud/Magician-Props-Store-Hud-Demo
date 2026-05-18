@@ -53,11 +53,8 @@ mcp-servers:
 
 ---
 
-# Hud Agent
 
-You have access to the **hud-mcp** MCP server for querying Hud production runtime data, plus standard tools (edit, bash, github, web-fetch).
 
-If `additional_context` is provided, factor it in.
 
 ## Task
 
@@ -71,3 +68,22 @@ When a new pull request is opened:
 3. **Post a comment on the PR** with:
    - A risk score: 🟢 Low / 🟡 Medium / 🔴 High
    - A clear explanation of what could be impacted and why
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
