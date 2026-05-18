@@ -1,0 +1,73 @@
+---
+name: pr-risk-score
+description: |
+  PR risk scoring gh-aw agent wired up with the Hud MCP server.
+
+on:
+  workflow_dispatch:
+    inputs:
+      additional_context:
+        description: 'PR Risk Assessment'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+runtimes:
+  node:
+    version: "22"
+
+steps:
+  - name: Checkout repository
+    uses: actions/checkout@v5
+    with:
+      fetch-depth: 0
+      persist-credentials: false
+
+network:
+  allowed:
+    - defaults
+    - node
+    - github
+    - "api.hud.io"
+    - "cdn.hud.io"
+
+tools:
+  edit:
+  bash: [":*"]
+  github:
+    toolsets: [repos, pull_requests]
+  web-fetch:
+
+engine: claude
+strict: false
+timeout-minutes: 30
+
+mcp-servers:
+  hud-mcp:
+    command: "npx"
+    args: ["-y", "hud-mcp"]
+    env:
+      HUD_MCP_KEY: "${{ secrets.HUD_MCP_KEY }}"
+
+---
+
+# Hud Agent
+
+You have access to the **hud-mcp** MCP server for querying Hud production runtime data, plus standard tools (edit, bash, github, web-fetch).
+
+If `additional_context` is provided, factor it in.
+
+## Task
+
+When a new pull request is opened:
+
+1. **Assess the risk and impact** of the proposed changes
+
+2. **Query Hud** to identify which production flows are affected
+   and how often they're invoked based on production runtime data. 
+   
+3. **Post a comment on the PR** with:
+   - A risk score: 🟢 Low / 🟡 Medium / 🔴 High
+   - A clear explanation of what could be impacted and why
