@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
 import { ProductRepository } from './repositories/product.repository';
@@ -23,26 +23,37 @@ export class ProductsService {
     const oneDayAgo = new Date();
     oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-    const productsWithPopularity: ProductWithPopularity[] = [];
-    for (const product of products) {
-      const orderCount = await this.getProductOrderCount(product.id, oneDayAgo);
+    const orderCounts = await this.getProductOrderCounts(
+      products.map((product) => product.id),
+      oneDayAgo,
+    );
 
-      productsWithPopularity.push({
-        ...product,
-        timesOrdered: orderCount,
-      });
-    }
-
-    return productsWithPopularity;
+    return products.map((product) => ({
+      ...product,
+      timesOrdered: orderCounts.get(product.id) ?? 0,
+    }));
   }
 
-  private async getProductOrderCount(productId: number, since: Date): Promise<number> {
-    return this.orderItemRepository.count({
-      where: {
-        product_id: productId,
-        created_at: MoreThanOrEqual(since),
-      }
-    });
+  private async getProductOrderCounts(
+    productIds: number[],
+    since: Date,
+  ): Promise<Map<number, number>> {
+    if (productIds.length === 0) {
+      return new Map();
+    }
+
+    const rows = await this.orderItemRepository
+      .createQueryBuilder('orderItem')
+      .select('orderItem.product_id', 'productId')
+      .addSelect('COUNT(orderItem.id)', 'orderCount')
+      .where('orderItem.product_id IN (:...productIds)', { productIds })
+      .andWhere('orderItem.created_at >= :since', { since })
+      .groupBy('orderItem.product_id')
+      .getRawMany<{ productId: string | number; orderCount: string }>();
+
+    return new Map(
+      rows.map((row) => [Number(row.productId), Number(row.orderCount)]),
+    );
   }
 
   async findOne(id: number): Promise<Product> {
