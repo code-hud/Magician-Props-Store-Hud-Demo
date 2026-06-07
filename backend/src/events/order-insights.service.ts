@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
+import { BundleRepository } from '../products/repositories/bundle.repository';
 import { ProductRepository } from '../products/repositories/product.repository';
-import { BUNDLE_GRAPH, isBundleProduct } from './bundle-graph.constant';
 import {
   OrderCreatedEvent,
   OrderCreatedItem,
@@ -11,7 +11,10 @@ import {
 export class OrderInsightsService {
   private expandBundleCallCount = 0;
 
-  constructor(private readonly productRepository: ProductRepository) {}
+  constructor(
+    private readonly productRepository: ProductRepository,
+    private readonly bundleRepository: BundleRepository,
+  ) {}
 
   async computeOrderInsights(event: OrderCreatedEvent): Promise<OrderInsights> {
     const startedAt = Date.now();
@@ -21,7 +24,7 @@ export class OrderInsightsService {
     let bundleItemsProcessed = 0;
 
     for (const item of event.items) {
-      if (!isBundleProduct(item.productId)) {
+      if (!(await this.bundleRepository.hasComponents(item.productId))) {
         continue;
       }
 
@@ -51,15 +54,11 @@ export class OrderInsightsService {
 
     await this.productRepository.findById(productId);
 
-    const components = BUNDLE_GRAPH[productId];
-    if (!components) {
-      return [];
-    }
-
+    const componentIds = await this.bundleRepository.findComponentIds(productId);
     const expanded: OrderCreatedItem[] = [];
 
-    for (const componentId of components) {
-      if (isBundleProduct(componentId)) {
+    for (const componentId of componentIds) {
+      if (await this.bundleRepository.hasComponents(componentId)) {
         const nested = await this.expandBundle(componentId);
         expanded.push(...nested);
       } else {

@@ -1,3 +1,12 @@
+CREATE TABLE product_bundle_items (
+  id SERIAL PRIMARY KEY,
+  bundle_product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  component_product_id INT NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  sort_order INT NOT NULL DEFAULT 0
+);
+
+CREATE INDEX idx_bundle_items_bundle ON product_bundle_items(bundle_product_id);
+
 INSERT INTO products (id, name, description, price, category, stock)
 VALUES (
     5001,
@@ -50,7 +59,7 @@ VALUES (
   (
     5007,
     'Silk Kit Bundle',
-    'Collection of forty silk scarves and accessories.',
+    'Collection of 120 silk scarves and accessories.',
     199.99,
     'Bundle',
     80
@@ -58,15 +67,40 @@ VALUES (
   (
     5008,
     'Wand Kit Bundle',
-    'Collection of forty wands and holders.',
+    'Collection of 120 wands and holders.',
     129.99,
     'Bundle',
     100
   );
+
+INSERT INTO product_bundle_items (bundle_product_id, component_product_id, sort_order)
+VALUES
+  (5001, 5003, 1),
+  (5001, 5004, 2),
+  (5002, 5, 1),
+  (5002, 6, 2),
+  (5003, 5005, 1),
+  (5003, 5006, 2),
+  (5004, 5005, 1),
+  (5004, 5006, 2);
+
+INSERT INTO product_bundle_items (bundle_product_id, component_product_id, sort_order)
+SELECT
+  bundle_id,
+  component_id,
+  row_number() OVER (PARTITION BY bundle_id ORDER BY rep, pos) AS sort_order
+FROM (VALUES (5005), (5006)) AS wings(bundle_id),
+     generate_series(0, 7) AS rep,
+     generate_series(1, 2) AS pos
+JOIN LATERAL (VALUES (1, 5007), (2, 5008)) AS components(pos, component_id) USING (pos);
+
+INSERT INTO product_bundle_items (bundle_product_id, component_product_id, sort_order)
+SELECT 5007, g, g FROM generate_series(1, 120) AS g;
+
+INSERT INTO product_bundle_items (bundle_product_id, component_product_id, sort_order)
+SELECT 5008, g, g - 120 FROM generate_series(121, 240) AS g;
+
 SELECT setval(
     pg_get_serial_sequence('products', 'id'),
-    (
-      SELECT MAX(id)
-      FROM products
-    )
+    (SELECT MAX(id) FROM products)
   );
