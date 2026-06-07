@@ -1,5 +1,6 @@
 import { Injectable, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Kafka, Producer, logLevel } from 'kafkajs';
+import { serializeOrderCreatedEvent } from './order-events.codec';
 import { OrderCreatedEvent, ORDERS_CREATED_TOPIC } from './order-events.types';
 
 @Injectable()
@@ -41,7 +42,7 @@ export class OrderEventsProducer implements OnModuleInit, OnModuleDestroy {
         messages: [
           {
             key: String(event.orderId),
-            value: JSON.stringify(event),
+            value: serializeOrderCreatedEvent(event),
           },
         ],
       })
