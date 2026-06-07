@@ -2,6 +2,9 @@ const { randomBytes } = require('node:crypto');
 
 const BASE_URL = process.env.API_URL || 'http://backend:3001';
 
+const VAULT_PRODUCT_ID = 5001;
+const VAULT_TRAFFIC_RATE = 0.04;
+
 // Utility functions
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const randomInt = (min, max) => Math.floor(Math.random() * (max - min + 1)) + min;
@@ -158,14 +161,19 @@ async function runCycle() {
     );
   }
 
+  if (Math.random() < VAULT_TRAFFIC_RATE && products.some((p) => p.id === VAULT_PRODUCT_ID)) {
+    await addToCart(VAULT_PRODUCT_ID, 1);
+  }
+
   // Randomly decide how many products to add (0-10)
   const numProductsToAdd = randomInt(0, 10);
   console.log(`[${new Date().toISOString()}] Will add ${numProductsToAdd} products to cart`);
 
-  // Add random products
+  const flatProducts = products.filter((p) => p.category !== 'Bundle');
   const addedProductIds = [];
   for (let i = 0; i < numProductsToAdd; i++) {
-    const product = products[randomInt(0, products.length - 1)];
+    if (flatProducts.length === 0) break;
+    const product = flatProducts[randomInt(0, flatProducts.length - 1)];
     const quantity = randomInt(1, 5);
     await addToCart(product.id, quantity);
     addedProductIds.push(product.id);
@@ -173,7 +181,7 @@ async function runCycle() {
 
   // Every once in a while, try to add the same product again
   if (addedProductIds.length > 0 && Math.random() < 0.3) {
-    const duplicateProduct = products.find(
+    const duplicateProduct = flatProducts.find(
       (p) => p.id === addedProductIds[randomInt(0, addedProductIds.length - 1)]
     );
     if (duplicateProduct) {
