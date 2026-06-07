@@ -1,5 +1,6 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import axios from 'axios';
+import { OrderEventsProducer } from '../events/order-events.producer';
 import { Order } from './entities/order.entity';
 import { OrderRepository } from './repositories/order.repository';
 import { CartRepository } from '../cart/repositories/cart.repository';
@@ -12,6 +13,7 @@ export class OrdersService {
   constructor(
     private orderRepository: OrderRepository,
     private cartRepository: CartRepository,
+    private orderEventsProducer: OrderEventsProducer,
   ) {}
 
   private async processCheckout(
@@ -71,6 +73,15 @@ export class OrdersService {
 
     // Clear cart
     await this.cartRepository.clearCart(sessionId);
+
+    this.orderEventsProducer.publishOrderCreated({
+      orderId: savedOrder.id,
+      sessionId,
+      customerEmail,
+      totalAmount,
+      items,
+      createdAt: new Date().toISOString(),
+    });
 
     return this.orderRepository.findById(savedOrder.id);
   }

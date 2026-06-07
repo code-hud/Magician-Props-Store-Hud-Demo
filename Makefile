@@ -20,6 +20,7 @@ help:
 	@echo "  make logs-backend   - View backend logs"
 	@echo "  make logs-frontend  - View frontend logs"
 	@echo "  make logs-db        - View database logs"
+	@echo "  make logs-redpanda  - View Redpanda (Kafka) logs"
 	@echo "  make clean          - Remove all containers and volumes"
 	@echo "  make shell-db       - Open database shell"
 	@echo ""
@@ -38,6 +39,7 @@ up:
 	@echo "Frontend: http://localhost:3000"
 	@echo "Backend:  http://localhost:3001"
 	@echo "Database: postgres://localhost:5432"
+	@echo "Kafka:    localhost:19092 (Redpanda)"
 	@echo "Hud commit_sha tag: $(GIT_COMMIT_SHA)"
 
 down:
@@ -56,6 +58,9 @@ logs-frontend:
 
 logs-db:
 	docker-compose logs -f postgres
+
+logs-redpanda:
+	docker-compose logs -f redpanda
 
 clean:
 	docker-compose down -v
