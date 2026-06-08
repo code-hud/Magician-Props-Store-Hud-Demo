@@ -1,7 +1,5 @@
 export const ORDERS_CREATED_TOPIC = 'orders.created';
 
-export const ORDERS_CREATED_GROUP = 'order-insights-consumer';
-
 export interface OrderCreatedItem {
   productId: number;
   quantity: number;

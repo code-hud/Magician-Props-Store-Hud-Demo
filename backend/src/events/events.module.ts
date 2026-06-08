@@ -1,13 +1,14 @@
 import { Module } from '@nestjs/common';
 import { ProductsModule } from '../products/products.module';
-import { OrderEventsController } from './order-events.controller';
-import { OrderEventsProducer } from './order-events.producer';
+import { CartActivityService } from './cart-activity.service';
+import { KafkaEventsController } from './kafka-events.controller';
+import { KafkaEventsProducer } from './kafka-events.producer';
 import { OrderInsightsService } from './order-insights.service';
 
 @Module({
   imports: [ProductsModule],
-  controllers: [OrderEventsController],
-  providers: [OrderEventsProducer, OrderInsightsService],
-  exports: [OrderEventsProducer],
+  controllers: [KafkaEventsController],
+  providers: [KafkaEventsProducer, CartActivityService, OrderInsightsService],
+  exports: [KafkaEventsProducer],
 })
 export class EventsModule {}

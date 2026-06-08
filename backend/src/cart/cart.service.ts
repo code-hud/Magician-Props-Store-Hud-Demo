@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { KafkaEventsProducer } from '../events/kafka-events.producer';
 import { CartItem } from './entities/cart-item.entity';
 import { CartRepository } from './repositories/cart.repository';
 import {
@@ -11,6 +12,7 @@ export class CartService {
   constructor(
     private cartRepository: CartRepository,
     private productsService: ProductsService,
+    private kafkaEventsProducer: KafkaEventsProducer,
   ) {}
 
   async getCart(sessionId: string): Promise<CartItem[]> {
@@ -22,7 +24,16 @@ export class CartService {
     productId: number,
     quantity: number = 1,
   ): Promise<CartItem> {
-    return this.cartRepository.addItem(sessionId, productId, quantity);
+    const item = await this.cartRepository.addItem(sessionId, productId, quantity);
+
+    this.kafkaEventsProducer.publishCartItemAdded({
+      sessionId,
+      productId,
+      quantity,
+      createdAt: new Date().toISOString(),
+    });
+
+    return item;
   }
 
   async removeFromCart(sessionId: string, productId: number): Promise<void> {
@@ -38,7 +49,18 @@ export class CartService {
   }
 
   async clearCart(sessionId: string): Promise<void> {
+    const cartItems = await this.cartRepository.findBySessionId(sessionId);
+    const itemCount = cartItems.length;
+
     await this.cartRepository.clearCart(sessionId);
+
+    if (itemCount > 0) {
+      this.kafkaEventsProducer.publishCartCleared({
+        sessionId,
+        itemCount,
+        createdAt: new Date().toISOString(),
+      });
+    }
   }
 
   async getCartTotal(sessionId: string): Promise<number> {
