@@ -1,8 +1,9 @@
 import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import axios from 'axios';
+import { KafkaEventsProducer } from '../events/kafka-events.producer';
 import { Order } from './entities/order.entity';
 import { OrderRepository } from './repositories/order.repository';
-import { CartRepository } from '../cart/repositories/cart.repository';
+import { CartService } from '../cart/cart.service';
 
 @Injectable()
 export class OrdersService {
@@ -11,7 +12,8 @@ export class OrdersService {
 
   constructor(
     private orderRepository: OrderRepository,
-    private cartRepository: CartRepository,
+    private cartService: CartService,
+    private kafkaEventsProducer: KafkaEventsProducer,
   ) {}
 
   private async processCheckout(
@@ -70,7 +72,16 @@ export class OrdersService {
     }
 
     // Clear cart
-    await this.cartRepository.clearCart(sessionId);
+    await this.cartService.clearCart(sessionId);
+
+    this.kafkaEventsProducer.publishOrderCreated({
+      orderId: savedOrder.id,
+      sessionId,
+      customerEmail,
+      totalAmount,
+      items,
+      createdAt: new Date().toISOString(),
+    });
 
     return this.orderRepository.findById(savedOrder.id);
   }

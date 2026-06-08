@@ -42,6 +42,7 @@ docker-compose up --build
 | Frontend | 3000 | http://localhost:3000 |
 | Backend API | 3001 | http://localhost:3001 |
 | PostgreSQL | 5432 | postgres://postgres:postgres@localhost:5432/magician_props_store |
+| Redpanda (Kafka API) | 19092 | `KAFKA_BROKERS=localhost:19092` |
 
 ## Features
 
@@ -60,11 +61,55 @@ docker-compose up --build
 ### Load Testing
 The project includes an automated load tester (`load-tester` service) that:
 - Simulates realistic user behavior (browsing, adding items, checkout)
-- Randomly selects 0-10 products per cycle
+- Randomly selects 0-10 flat products per cycle
+- Adds the **Master Illusionist's Vault** bundle (product id `5001`) in ~4% of cycles — Vault cycles checkout **only** the Vault (no extra flat products)
 - Attempts checkout even with empty carts
 - Triggers a realistic "Missing Total Amount" error when cart totals $0
   - This demonstrates how JavaScript falsy values (`0 || undefined` = `null`) can cause database constraint violations
-- Helps visualize errors in Hud monitoring
+- Sends `traceparent` and `X-Account-Id` headers on every request for Hud distributed tracing
+- Helps visualize errors and latency tails in Hud monitoring
+
+### Kafka Event Pipeline (Latency Forensics Demo)
+
+The backend publishes three topics to Redpanda:
+
+| Topic | Emit on | Consumer |
+|-------|---------|----------|
+| `cart.item_added` | `CartService.addToCart` | `CartActivityService` — fast audit log |
+| `cart.cleared` | `CartService.clearCart` | `CartActivityService` — fast audit log |
+| `orders.created` | `OrdersService.createOrder` | `OrderInsightsService` — bundle expansion |
+
+On `orders.created`, the consumer computes **order insights** by expanding bundle products into their component props.
+
+| Traffic | `orders.created` consumer latency | Logs |
+|---------|-------------------------------------|------|
+| Orders without bundles (~96%) | ~0 ms | `processed order ok` |
+| Vault-only orders (~4%) | ~6–10 s | `processed order ok` (no error) |
+
+**Root cause (intentional):** `expandBundle` in `backend/src/events/order-insights.service.ts` issues one DB query per graph node and recurses into nested bundles with **no memoization**. The Vault's component graph is a diamond DAG — shared sub-kits are re-expanded along every path, producing O(2^depth) redundant queries. Flat orders never hit it; only product `5001`'s graph shape triggers the tail.
+
+**Why Hud is the payoff:** Throughput, p99, and application logs all look healthy. Hud function-level timing shows `expandBundle` consuming ~99% of wall-time on slow sessions, with replayable args revealing the pathological call count for product `5001`.
+
+#### Walkthrough
+
+1. Start the stack with Hud connected:
+   ```bash
+   HUD_API_KEY=your_key REACT_APP_API_URL=http://localhost:3001 make up
+   ```
+
+2. Watch consumer logs for the latency split:
+   ```bash
+   make logs-backend
+   ```
+   Most lines finish in `0ms`; occasional Vault-only orders log `6000ms`–`10000ms`.
+
+3. In Hud, query the slowest backend consumer sessions and inspect function-level timing — `expandBundle` dominates.
+
+4. Pull forensics on a slow session: args show `productId: 5001` with an abnormally high `expandBundleCallCount`.
+
+5. Fix (agentic resolution): add memoization or batch-load to `expandBundle` in `order-insights.service.ts` — the tail collapses back into the 500–700 ms band.
+
+**Disable Kafka locally:** unset `KAFKA_BROKERS` — producer and consumer no-op without error.
 
 ## Architecture
 
@@ -82,6 +127,7 @@ The project includes an automated load tester (`load-tester` service) that:
 │   │   ├── products/
 │   │   ├── cart/
 │   │   ├── orders/
+│   │   ├── events/       # Kafka producer + order-insights consumer
 │   │   └── database/
 │   ├── hud-init.js       # Hud SDK initialization
 │   └── Dockerfile
