@@ -162,7 +162,22 @@ async function runCycle() {
   }
 
   if (Math.random() < VAULT_TRAFFIC_RATE && products.some((p) => p.id === VAULT_PRODUCT_ID)) {
+    console.log(
+      `[${new Date().toISOString()}] Vault-only cycle — checkout with product ${VAULT_PRODUCT_ID} only`
+    );
     await addToCart(VAULT_PRODUCT_ID, 1);
+    const cart = await getCart();
+    await getCartSuggestions();
+    console.log(`[${new Date().toISOString()}] Attempting checkout with ${cart.length} items...`);
+    await checkout(cart);
+
+    const sleepTime = randomInt(10000, 60000);
+    const sleepSeconds = (sleepTime / 1000).toFixed(1);
+    console.log(
+      `[${new Date().toISOString()}] ========== CYCLE END - Sleeping for ${sleepSeconds}s ==========`
+    );
+    await sleep(sleepTime);
+    return;
   }
 
   // Randomly decide how many products to add (0-10)
