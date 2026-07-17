@@ -13,6 +13,6 @@ import { PromotionsModule } from '../promotions/promotions.module';
   imports: [TypeOrmModule.forFeature([Order, OrderItem, CartItem]), PromotionsModule],
   controllers: [OrdersController],
   providers: [OrderRepository, CartRepository, OrdersService],
-  exports: [OrdersService],
+  exports: [OrdersService, OrderRepository],
 })
 export class OrdersModule {}
