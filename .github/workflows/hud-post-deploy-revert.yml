@@ -1,0 +1,263 @@
+# Hud Post-Deploy Revert Workflow
+#
+# A thin, deterministic executor. The agentic part — detecting the post-deploy
+# regression, correlating it to a deploy, and DECIDING to revert — happens on
+# Hud's side. When Hud decides, it fires this workflow with the offending
+# commit and the alert facts in the payload. This workflow just performs the
+# revert and opens a PR. No LLM, no analysis here.
+#
+# Where auto-fix writes a forward-fix, this reverts the deploy Hud flagged —
+# the faster remediation when the change is clearly the cause and sits on a
+# critical flow.
+#
+# Webhook payload (repository_dispatch) should include:
+# {
+#   "event_type": "hud-degradation",
+#   "client_payload": {
+#     "endpoint": "GET /cart/suggestions",
+#     "slowdown": "[53.23ms -> 2.05s], [+3,748%] average P90 duration",
+#     "primary_function": "ProductsService.findAll(search, category)",
+#     "baseline_p90_ms": "53.23",
+#     "degraded_p90_ms": "2048",
+#     "bad_deploy_sha": "1f176d3",
+#     "revert_file": "backend/src/products/products.service.ts",
+#     "deploy_timestamp": "2026-06-08 18:17:48",
+#     "root_cause": "Since the last deploy, findAll added heavier product filtering work.",
+#     "issue_link": "https://app.hud.io/...",
+#     "endpoint_link": "https://app.hud.io/...",
+#     "ticket_url": "https://codehud.atlassian.net/browse/MAGSTORE-18"
+#   }
+# }
+#
+# No secrets required beyond the default GITHUB_TOKEN (needs contents:write +
+# pull-requests:write, declared below).
+
+name: Hud Post-Deploy Revert
+
+on:
+  repository_dispatch:
+    types: [hud-degradation]
+  workflow_dispatch:
+    inputs:
+      endpoint:
+        description: 'Degraded endpoint (e.g., GET /cart/suggestions)'
+        required: true
+        type: string
+      slowdown:
+        description: 'Slowdown summary (e.g., [53.23ms -> 2.05s], [+3,748%] P90)'
+        required: false
+        type: string
+      primary_function:
+        description: 'Primary function driving the slowdown'
+        required: false
+        type: string
+      baseline_p90_ms:
+        description: 'Pre-deploy P90 baseline in ms'
+        required: false
+        type: string
+      degraded_p90_ms:
+        description: 'Post-deploy P90 in ms'
+        required: false
+        type: string
+      bad_deploy_sha:
+        description: 'Commit SHA of the offending deploy (Hud-identified)'
+        required: true
+        type: string
+      revert_file:
+        description: 'File to restore if a full revert conflicts'
+        required: false
+        type: string
+      deploy_timestamp:
+        description: 'Deploy timestamp (UTC) correlated with onset'
+        required: false
+        type: string
+      root_cause:
+        description: 'Root-cause sentence from the Hud alert'
+        required: false
+        type: string
+      ticket_url:
+        description: 'Jira/issue tracker URL'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  revert:
+    name: Open Revert PR
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Mask app token
+        if: github.event_name == 'repository_dispatch'
+        run: echo "::add-mask::${{ github.event.client_payload.token }}"
+
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ github.event.client_payload.token || github.token }}
+
+      - name: Configure git identity
+        run: |
+          git config user.name "hud-issuehelper[bot]"
+          git config user.email "216726706+hud-issuehelper[bot]@users.noreply.github.com"
+
+      - name: Extract degradation context
+        id: ctx
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            ENDPOINT='${{ github.event.client_payload.endpoint }}'
+            SLOWDOWN='${{ github.event.client_payload.slowdown }}'
+            PRIMARY_FN='${{ github.event.client_payload.primary_function }}'
+            BASELINE='${{ github.event.client_payload.baseline_p90_ms }}'
+            DEGRADED='${{ github.event.client_payload.degraded_p90_ms }}'
+            BAD_SHA='${{ github.event.client_payload.bad_deploy_sha }}'
+            REVERT_FILE='${{ github.event.client_payload.revert_file }}'
+            DEPLOY_TS='${{ github.event.client_payload.deploy_timestamp }}'
+            ROOT_CAUSE='${{ github.event.client_payload.root_cause }}'
+            ISSUE_LINK='${{ github.event.client_payload.issue_link }}'
+            ENDPOINT_LINK='${{ github.event.client_payload.endpoint_link }}'
+            TICKET_URL='${{ github.event.client_payload.ticket_url }}'
+          else
+            ENDPOINT='${{ inputs.endpoint }}'
+            SLOWDOWN='${{ inputs.slowdown }}'
+            PRIMARY_FN='${{ inputs.primary_function }}'
+            BASELINE='${{ inputs.baseline_p90_ms }}'
+            DEGRADED='${{ inputs.degraded_p90_ms }}'
+            BAD_SHA='${{ inputs.bad_deploy_sha }}'
+            REVERT_FILE='${{ inputs.revert_file }}'
+            DEPLOY_TS='${{ inputs.deploy_timestamp }}'
+            ROOT_CAUSE='${{ inputs.root_cause }}'
+            ISSUE_LINK=''
+            ENDPOINT_LINK=''
+            TICKET_URL='${{ inputs.ticket_url }}'
+          fi
+
+          {
+            echo "endpoint=$ENDPOINT"
+            echo "slowdown=$SLOWDOWN"
+            echo "primary_fn=$PRIMARY_FN"
+            echo "baseline=$BASELINE"
+            echo "degraded=$DEGRADED"
+            echo "bad_sha=$BAD_SHA"
+            echo "revert_file=$REVERT_FILE"
+            echo "deploy_ts=$DEPLOY_TS"
+            echo "root_cause=$ROOT_CAUSE"
+            echo "issue_link=$ISSUE_LINK"
+            echo "endpoint_link=$ENDPOINT_LINK"
+            echo "ticket_url=$TICKET_URL"
+            echo "run_number=${{ github.run_number }}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Reverting $BAD_SHA for $ENDPOINT"
+
+      - name: Create revert branch
+        id: revert
+        run: |
+          SHA="${{ steps.ctx.outputs.bad_sha }}"
+          FILE="${{ steps.ctx.outputs.revert_file }}"
+          BRANCH="hud/revert/${{ steps.ctx.outputs.run_number }}"
+          git checkout -b "$BRANCH"
+
+          REVERTED="false"
+          if git revert --no-edit "$SHA" 2>/tmp/revert_err.txt; then
+            echo "Reverted commit $SHA cleanly."
+            REVERTED="true"
+          elif [ -n "$FILE" ]; then
+            # Full revert conflicted (a later commit touched neighbours) — restore
+            # just the regressed file to its pre-deploy state. Minimal, safe.
+            git revert --abort 2>/dev/null || true
+            git checkout "${SHA}~1" -- "$FILE"
+            git add "$FILE"
+            git commit -m "Revert regressed change in $FILE (pre-$SHA state)"
+            echo "Restored $FILE to its pre-deploy state (${SHA}~1)."
+            REVERTED="true"
+          else
+            echo "::error::Revert of $SHA conflicted and no revert_file was provided."
+          fi
+
+          echo "reverted=$REVERTED" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          [ "$REVERTED" = "true" ] && git push -u origin "$BRANCH" || true
+
+      - name: Open revert Pull Request
+        if: steps.revert.outputs.reverted == 'true'
+        id: pr
+        run: |
+          ENDPOINT="${{ steps.ctx.outputs.endpoint }}"
+          SLOWDOWN="${{ steps.ctx.outputs.slowdown }}"
+          PRIMARY_FN="${{ steps.ctx.outputs.primary_fn }}"
+          BASELINE="${{ steps.ctx.outputs.baseline }}"
+          DEGRADED="${{ steps.ctx.outputs.degraded }}"
+          BAD_SHA="${{ steps.ctx.outputs.bad_sha }}"
+          DEPLOY_TS="${{ steps.ctx.outputs.deploy_ts }}"
+          ROOT_CAUSE="${{ steps.ctx.outputs.root_cause }}"
+          ISSUE_LINK="${{ steps.ctx.outputs.issue_link }}"
+          ENDPOINT_LINK="${{ steps.ctx.outputs.endpoint_link }}"
+          TICKET_URL="${{ steps.ctx.outputs.ticket_url }}"
+
+          {
+            LINKS=""
+            [ -n "$ISSUE_LINK" ] && LINKS="[View in Hud]($ISSUE_LINK)"
+            [ -n "$TICKET_URL" ] && { [ -n "$LINKS" ] && LINKS="$LINKS &nbsp;&middot;&nbsp; "; LINKS="$LINKS[Ticket]($TICKET_URL)"; }
+            if [ -n "$ENDPOINT_LINK" ]; then
+              [ -n "$LINKS" ] && LINKS="$LINKS &nbsp;&middot;&nbsp; "
+              LINKS="$LINKS[\`$ENDPOINT\`]($ENDPOINT_LINK)"
+            fi
+            [ -n "$LINKS" ] && { echo "$LINKS"; echo ''; echo '---'; echo ''; }
+
+            [ -n "$ROOT_CAUSE" ] && { echo "### Root cause"; echo "$ROOT_CAUSE"; echo ''; }
+
+            echo "### Evidence (from Hud)"
+            [ -n "$BASELINE" ] && [ -n "$DEGRADED" ] && echo "- Endpoint P90: **${BASELINE}ms → ${DEGRADED}ms** (${SLOWDOWN})"
+            [ -n "$PRIMARY_FN" ] && echo "- Primary function: \`${PRIMARY_FN}\`"
+            echo "- Correlated deploy: \`${BAD_SHA}\`${DEPLOY_TS:+ @ ${DEPLOY_TS} UTC}"
+            echo ''
+            echo "### Action"
+            echo "Reverts \`${BAD_SHA}\` to restore the pre-deploy behaviour."
+            echo ''
+            echo '---'
+            echo ''
+            echo '**Validation**'
+            echo "- [ ] Review the revert"
+            if [ -n "$ENDPOINT_LINK" ]; then
+              echo "- [ ] Merge to restore the endpoint, then [monitor on Hud]($ENDPOINT_LINK)"
+            else
+              echo "- [ ] Merge to restore the endpoint, then monitor on Hud"
+            fi
+            echo "- [ ] Follow up with a correct forward-fix (batched popularity lookup)"
+            echo ''
+            echo '<sub><a href="https://hud.io">hud.io</a> &nbsp;&middot;&nbsp; post-deploy revert &nbsp;&middot;&nbsp; <a href="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}">workflow run</a></sub>'
+          } > /tmp/pr_body.md
+
+          PR_URL=$(gh pr create \
+            --title "⏪ Revert: ${ENDPOINT} post-deploy regression" \
+            --body-file /tmp/pr_body.md \
+            --base main \
+            --head "${{ steps.revert.outputs.branch }}" \
+            --label "hud")
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "✅ Opened revert PR: $PR_URL"
+        env:
+          GH_TOKEN: ${{ github.event.client_payload.token || github.token }}
+
+      - name: Report status
+        if: always()
+        run: |
+          {
+            echo "## ⏪ Hud Post-Deploy Revert"
+            echo ""
+            echo "**Endpoint:** ${{ steps.ctx.outputs.endpoint }}"
+            echo "**Slowdown:** ${{ steps.ctx.outputs.slowdown }}"
+            echo "**Reverted deploy:** \`${{ steps.ctx.outputs.bad_sha }}\`"
+            echo ""
+            if [ -n "${{ steps.pr.outputs.pr_url }}" ]; then
+              echo "✅ **Revert PR:** ${{ steps.pr.outputs.pr_url }}"
+            else
+              echo "⚠️ No revert PR opened — check the revert step."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
