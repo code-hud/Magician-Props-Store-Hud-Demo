@@ -73,5 +73,9 @@ describe('pricing.util', () => {
     it('applies a fixed discount', () => {
       expect(applyDiscount(100, { type: 'fixed', value: 5 })).toBe(95);
     });
+
+    it('never returns a negative payable amount', () => {
+      expect(applyDiscount(20, { type: 'fixed', value: 50 })).toBe(0);
+    });
   });
 });
