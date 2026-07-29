@@ -49,6 +49,44 @@ export class ProductRepository {
     return products;
   }
 
+  async findTopByPopularityInCategory(
+    category: string,
+    excludeProductIds: number[],
+    since: Date,
+    limit: number,
+  ): Promise<(Product & { timesOrdered: number })[]> {
+    const qb = this.repository.createQueryBuilder('product')
+      .addSelect(
+        'COALESCE(popularity.times_ordered, 0)',
+        'timesOrdered',
+      )
+      .leftJoin(
+        subQuery => subQuery
+          .select('oi.product_id', 'product_id')
+          .addSelect('COUNT(*)::int', 'times_ordered')
+          .from('order_items', 'oi')
+          .where('oi.created_at >= :since', { since })
+          .groupBy('oi.product_id'),
+        'popularity',
+        'popularity.product_id = product.id',
+      )
+      .where('product.category = :category', { category });
+
+    if (excludeProductIds.length > 0) {
+      qb.andWhere('product.id NOT IN (:...excludeProductIds)', { excludeProductIds });
+    }
+
+    qb.orderBy('COALESCE(popularity.times_ordered, 0)', 'DESC')
+      .addOrderBy('product.created_at', 'DESC')
+      .limit(limit);
+
+    const { entities, raw } = await qb.getRawAndEntities();
+    return entities.map((entity, i) => ({
+      ...entity,
+      timesOrdered: parseInt(raw[i].timesOrdered, 10) || 0,
+    }));
+  }
+
   async getCategories(): Promise<string[]> {
     const categories = await this.repository
       .createQueryBuilder('product')
