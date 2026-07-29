@@ -66,16 +66,16 @@ export class CartService {
 
     if (!primaryCategory) return [];
 
-    const products = await this.productsService.findAll('', primaryCategory);
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-    const cartProductIds = new Set(cartItems.map((i) => i.product_id));
-    const availableProducts = products.filter((p) => !cartProductIds.has(p.id));
+    const cartProductIds = cartItems.map((i) => i.product_id);
 
-    // Sort by popularity (most ordered first) and pick top 3
-    const suggestions = availableProducts
-      .sort((a, b) => b.timesOrdered - a.timesOrdered)
-      .slice(0, 3);
-
-    return suggestions;
+    return this.productsService.findPopularByCategory(
+      primaryCategory,
+      cartProductIds,
+      oneDayAgo,
+      3,
+    );
   }
 }
