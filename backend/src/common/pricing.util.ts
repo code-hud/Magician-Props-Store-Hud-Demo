@@ -80,5 +80,6 @@ export function applyDiscount(subtotal: number, discount: Discount): number {
     discount.type === 'percentage'
       ? base * (normalizeAmount(discount.value) / 100)
       : normalizeAmount(discount.value);
-  return Math.round((base - reduction) * CURRENCY_SCALE) / CURRENCY_SCALE;
+  const payable = Math.max(0, base - reduction);
+  return Math.round(payable * CURRENCY_SCALE) / CURRENCY_SCALE;
 }
