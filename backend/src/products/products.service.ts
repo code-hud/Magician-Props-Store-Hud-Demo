@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { OrderItem } from '../orders/entities/order-item.entity';
 import { ProductRepository } from './repositories/product.repository';
@@ -20,29 +20,31 @@ export class ProductsService {
   async findAll(search?: string, category?: string): Promise<ProductWithPopularity[]> {
     const products = await this.productRepository.searchWithFilters(search, category);
 
+    if (products.length === 0) {
+      return [];
+    }
+
     const oneDayAgo = new Date();
     oneDayAgo.setDate(oneDayAgo.getDate() - 1);
 
-    const productsWithPopularity: ProductWithPopularity[] = [];
-    for (const product of products) {
-      const orderCount = await this.getProductOrderCount(product.id, oneDayAgo);
+    const productIds = products.map((p) => p.id);
+    const orderCounts = await this.orderItemRepository
+      .createQueryBuilder('oi')
+      .select('oi.product_id', 'productId')
+      .addSelect('COUNT(*)', 'count')
+      .where('oi.created_at >= :since', { since: oneDayAgo })
+      .andWhere('oi.product_id IN (:...productIds)', { productIds })
+      .groupBy('oi.product_id')
+      .getRawMany<{ productId: number; count: string }>();
 
-      productsWithPopularity.push({
-        ...product,
-        timesOrdered: orderCount,
-      });
-    }
+    const countMap = new Map(
+      orderCounts.map((r) => [r.productId, parseInt(r.count, 10)]),
+    );
 
-    return productsWithPopularity;
-  }
-
-  private async getProductOrderCount(productId: number, since: Date): Promise<number> {
-    return this.orderItemRepository.count({
-      where: {
-        product_id: productId,
-        created_at: MoreThanOrEqual(since),
-      }
-    });
+    return products.map((product) => ({
+      ...product,
+      timesOrdered: countMap.get(product.id) ?? 0,
+    }));
   }
 
   async findOne(id: number): Promise<Product> {
